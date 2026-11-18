@@ -1,5 +1,6 @@
 """Exercise the local GPT-SoVITS API without opening a port."""
 
+import argparse
 import asyncio
 import importlib
 import io
@@ -22,16 +23,50 @@ custom:
   cnhuhbert_base_path: GPT_SoVITS/pretrained_models/chinese-hubert-base
 """
 
+SUPPORTED_LANGS = (
+    "zh",
+    "en",
+    "ja",
+    "yue",
+    "ko",
+    "all_zh",
+    "all_ja",
+    "all_yue",
+    "all_ko",
+    "auto",
+    "auto_yue",
+)
 
-async def synthesize(app, reference_audio, reference_text):
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Exercise the local GPT-SoVITS API without opening a port."
+    )
+    parser.add_argument("reference_wav", help="Path to reference_en.wav")
+    parser.add_argument("output_dir", help="Directory to save the generated WAV")
+    parser.add_argument(
+        "--text",
+        default="你好呀，终于又见面了。",
+        help="Text to synthesize (default: Mandarin greeting)",
+    )
+    parser.add_argument(
+        "--lang",
+        default="zh",
+        choices=SUPPORTED_LANGS,
+        help="GPT-SoVITS text_lang code (default: zh)",
+    )
+    return parser.parse_args()
+
+
+async def synthesize(app, reference_audio, reference_text, text, lang):
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://localhost"
     ) as client:
         response = await client.post(
             "/tts",
             json={
-                "text": "你好呀，终于又见面了。",
-                "text_lang": "zh",
+                "text": text,
+                "text_lang": lang,
                 "ref_audio_path": str(reference_audio),
                 "prompt_lang": "en",
                 "prompt_text": reference_text,
@@ -46,11 +81,10 @@ async def synthesize(app, reference_audio, reference_text):
 
 
 def main():
-    if len(sys.argv) != 3:
-        raise SystemExit("Usage: smoke-test.py REFERENCE_WAV OUTPUT_DIRECTORY")
+    args = parse_args()
 
-    reference_audio = Path(sys.argv[1]).resolve(strict=True)
-    output_dir = Path(sys.argv[2]).resolve()
+    reference_audio = Path(args.reference_wav).resolve(strict=True)
+    output_dir = Path(args.output_dir).resolve()
     checkout = Path.cwd()
     required_files = (
         "api_v2.py",
@@ -70,7 +104,9 @@ def main():
         sys.path.insert(0, str(checkout))
         sys.argv = ["api_v2.py", "-c", str(config_path)]
         app = importlib.import_module("api_v2").APP
-        audio = asyncio.run(synthesize(app, reference_audio, reference_text))
+        audio = asyncio.run(
+            synthesize(app, reference_audio, reference_text, args.text, args.lang)
+        )
 
     with wave.open(io.BytesIO(audio)) as wav:
         frames = wav.getnframes()

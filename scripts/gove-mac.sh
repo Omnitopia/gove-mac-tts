@@ -6,21 +6,46 @@ fail() {
   exit 1
 }
 
+usage() {
+  printf 'Usage: bash gove-mac.sh {install|verify} [install-directory] [--text TEXT] [--lang LANG]\n'
+}
+
 mode=${1:-}
 case "$mode" in
-  install|verify) ;;
+  install|verify) shift ;;
   -h|--help|"")
-    printf 'Usage: bash gove-mac.sh {install|verify} [install-directory]\n'
+    usage
     exit 0
     ;;
   *) fail "Unknown command: $mode" ;;
 esac
-[ "$#" -le 2 ] || fail 'Pass at most one install directory.'
+
+root="$HOME/Gove-TTS"
+if [ "$#" -gt 0 ] && [[ "$1" != --* ]]; then
+  root=$1
+  shift
+fi
+
+extra_args=()
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --text|--lang)
+      [ "$#" -ge 2 ] || fail "Missing value for $1."
+      extra_args+=("$1" "$2")
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *) fail "Unexpected argument: $1" ;;
+  esac
+done
+
 [ "$(uname -s):$(uname -m)" = 'Darwin:arm64' ] ||
   fail 'Use an Apple Silicon Mac in a native arm64 terminal.'
 
 skill_dir="$(cd "$(dirname "$0")/.." && pwd -P)"
-root=${2:-"$HOME/Gove-TTS"}
 [[ "$root" = /* ]] || fail 'Pass an absolute install directory.'
 repo="$root/GPT-SoVITS"
 runtime="$root/env"
@@ -62,6 +87,7 @@ if [ "$mode" = install ] && { [ ! -x "$runtime/bin/python" ] || ! has_model_file
     curl -fL --retry 3 -o "$installer" "$miniforge_url"
     verify_sha fb567612b76f4ef46de326f04425dbe381b6afc6a66c545f5043255a5ef34258 "$installer"
     bash "$installer" -b -p "$root/miniforge3"
+    rm -f "$installer"
   fi
 
   if [ ! -x "$runtime/bin/python" ]; then
@@ -79,17 +105,21 @@ if [ "$mode" = install ] && { [ ! -x "$runtime/bin/python" ] || ! has_model_file
     touch "$root/.gove-runtime-ready"
   fi
 
-  source_wav='ChatGPT is a generative artificial intelligence chatbot developed by OpenAI and launched in 2022. It is currently based on the GPT-4o large language model..wav'
-  mkdir -p "$root/Gove" "$ref_dir" GPT_weights_v2ProPlus SoVITS_weights_v2ProPlus
-  HF_HUB_DISABLE_IMPLICIT_TOKEN=1 "$runtime/bin/hf" download OmniDimen/Gove \
-    Gove.ckpt Gove.pth "$source_wav" --revision "$model_revision" --local-dir "$root/Gove"
-  verify_sha "$gpt_sha" "$root/Gove/Gove.ckpt"
-  verify_sha "$sovits_sha" "$root/Gove/Gove.pth"
-  verify_sha "$ref_sha" "$root/Gove/$source_wav"
-  cp -n "$root/Gove/Gove.ckpt" GPT_weights_v2ProPlus/Gove.ckpt
-  cp -n "$root/Gove/Gove.pth" SoVITS_weights_v2ProPlus/Gove.pth
-  cp -n "$root/Gove/$source_wav" "$ref_dir/reference_en.wav"
-  cp -n "$skill_dir/assets/reference_en.txt" "$ref_dir/reference_en.txt"
+  if ! has_model_files; then
+    source_wav='ChatGPT is a generative artificial intelligence chatbot developed by OpenAI and launched in 2022. It is currently based on the GPT-4o large language model..wav'
+    staging_dir="$root/.gove-download"
+    mkdir -p "$staging_dir" "$ref_dir" GPT_weights_v2ProPlus SoVITS_weights_v2ProPlus
+    HF_HUB_DISABLE_IMPLICIT_TOKEN=1 "$runtime/bin/hf" download OmniDimen/Gove \
+      Gove.ckpt Gove.pth "$source_wav" --revision "$model_revision" --local-dir "$staging_dir"
+    verify_sha "$gpt_sha" "$staging_dir/Gove.ckpt"
+    verify_sha "$sovits_sha" "$staging_dir/Gove.pth"
+    verify_sha "$ref_sha" "$staging_dir/$source_wav"
+    mv -f "$staging_dir/Gove.ckpt" GPT_weights_v2ProPlus/Gove.ckpt
+    mv -f "$staging_dir/Gove.pth" SoVITS_weights_v2ProPlus/Gove.pth
+    mv -f "$staging_dir/$source_wav" "$ref_dir/reference_en.wav"
+    cp -f "$skill_dir/assets/reference_en.txt" "$ref_dir/reference_en.txt"
+    rm -rf "$staging_dir"
+  fi
 fi
 
 [ -x "$runtime/bin/python" ] && [ -f "$repo/api_v2.py" ] ||
@@ -99,4 +129,4 @@ verify_sha "$sovits_sha" "$repo/SoVITS_weights_v2ProPlus/Gove.pth"
 verify_sha "$ref_sha" "$ref_dir/reference_en.wav"
 cd "$repo"
 PATH="$runtime/bin:$PATH" "$runtime/bin/python" -u "$skill_dir/scripts/smoke-test.py" \
-  "$ref_dir/reference_en.wav" "$root/output"
+  "$ref_dir/reference_en.wav" "$root/output" ${extra_args[@]+"${extra_args[@]}"}
